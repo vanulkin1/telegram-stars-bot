@@ -14,9 +14,9 @@ from aiocryptopay import AioCryptoPay, Networks
 import aiohttp
 
 API_KEY = '4y5i6AxM7hGu6ev7En4u'
-BOT_TOKEN = "8110347269:AAFWjcoxcV-nQdS6yxBp7gnNylH01KHWULc"
+BOT_TOKEN = "8110347269:AAFAEYP9t94XkYIFUOL5T5NIklVEbxn8j4M"
 ADMIN_ID = 7163004463
-CRYPTO_PAY_TOKEN = "443925:AA1DMGV0OOCT3qJ93lRCRt14Z2ZXJ74LceL"
+CRYPTO_PAY_TOKEN = "443925:AADBEYbGPoegiDTcjn7CtgK4ZIVAATEgrKz"
 
 GET_PRICE_URL = "https://bankstars.helper20sms.ru/api/price"
 MAKE_ORDER_URL = "https://bankstars.helper20sms.ru/api/order"
