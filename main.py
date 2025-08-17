@@ -12,7 +12,7 @@ from aiogram.utils.markdown import escape_md, bold, italic
 from aiocryptopay import AioCryptoPay, Networks
 
 API_KEY = '4y5i6AxM7hGu6ev7En4u'
-1 = "8110347269:AAHP1AdO6fGGjRSsJTtP_fSXcwQJ4UWSjjs"
+a = "8110347269:AAHP1AdO6fGGjRSsJTtP_fSXcwQJ4UWSjjs"
 ADMIN_ID = 7163004463
 CRYPTO_PAY_TOKEN = "443925:AAvkBli2db0LpRSaXFQiSr0z0nfvd2SIFmb"
 
@@ -25,7 +25,7 @@ payment_data = {}
 
 logging.basicConfig(level=logging.INFO)
 
-bot = Bot(token=1, parse_mode="HTML")
+bot = Bot(token=a, parse_mode="HTML")
 dp = Dispatcher(bot)
 crypto = AioCryptoPay(token=CRYPTO_PAY_TOKEN, network=Networks.MAIN_NET)
 
