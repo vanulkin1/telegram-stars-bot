@@ -1,22 +1,20 @@
 
 import asyncio
 import logging
+import os
+import json
+import sqlite3
 import logging as logger
-
+import aiohttp
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.markdown import escape_md, bold, italic
-
-from data.db import create_connection, create_tables, update_user_profile
-from data.keyboards import create_main_menu_keyboard
-from data.admin import register_admin_handlers
 from aiocryptopay import AioCryptoPay, Networks
-import aiohttp
 
 API_KEY = '4y5i6AxM7hGu6ev7En4u'
-BOT_TOKEN = "8110347269:AAFAEYP9t94XkYIFUOL5T5NIklVEbxn8j4M"
+1 = "8110347269:AAHP1AdO6fGGjRSsJTtP_fSXcwQJ4UWSjjs"
 ADMIN_ID = 7163004463
-CRYPTO_PAY_TOKEN = "443925:AADBEYbGPoegiDTcjn7CtgK4ZIVAATEgrKz"
+CRYPTO_PAY_TOKEN = "443925:AAvkBli2db0LpRSaXFQiSr0z0nfvd2SIFmb"
 
 GET_PRICE_URL = "https://bankstars.helper20sms.ru/api/price"
 MAKE_ORDER_URL = "https://bankstars.helper20sms.ru/api/order"
@@ -24,20 +22,23 @@ GET_ORDER_INFO_URL = "https://bankstars.helper20sms.ru/api/order"
 API_BALANCE_URL = "https://bankstars.helper20sms.ru/api/balance"
 payment_data = {}
 
+
 logging.basicConfig(level=logging.INFO)
 
-bot = Bot(token=BOT_TOKEN, parse_mode="HTML")
+bot = Bot(token=1, parse_mode="HTML")
 dp = Dispatcher(bot)
 crypto = AioCryptoPay(token=CRYPTO_PAY_TOKEN, network=Networks.MAIN_NET)
 
-DATABASE_FILE = "data/starsbot.db"
+DATABASE_FILE = "starsbot.db"
 INVOICE_STORE = {}
 USERNAME_STORE = {}
+PURCHASE_DATA = {}
 
-# Initialize the database
-conn = create_connection(DATABASE_FILE)
-create_tables(conn)
-conn.close()
+
+def create_connection():
+    conn = sqlite3.connect(DATABASE_FILE)
+    return conn
+
 
 async def create_crypto_client():
     """Создание клиента CryptoBot в async контексте"""
@@ -48,6 +49,183 @@ async def create_crypto_client():
     except Exception as e:
         logger.error(f"Ошибка создания crypto клиента: {e}")
         return None
+
+
+def create_tables(conn):
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            stars_bought INTEGER DEFAULT 0,
+            premium_months_bought INTEGER DEFAULT 0,
+            banned INTEGER DEFAULT 0
+        )
+    """)
+    conn.commit()
+
+
+conn = create_connection()
+create_tables(conn)
+conn.close()
+
+
+def create_main_menu_keyboard() -> InlineKeyboardMarkup:
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        InlineKeyboardButton(text="⭐️ Звёзды", callback_data="buy_stars"),
+        InlineKeyboardButton(text="👑 Премиум", callback_data="buy_premium"),
+        InlineKeyboardButton(text="👤 Профиль", callback_data="profile"),
+        InlineKeyboardButton(text="❓ F.A.Q.", callback_data="faq"),
+    )
+    return keyboard
+
+
+def create_username_choice_keyboard(item_type: str, amount: int = 0) -> InlineKeyboardMarkup:
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton(text="🎩 Для Себя", callback_data=f"buy_for_self:{item_type}:{amount}"))
+    keyboard.add(InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_main_menu"))
+    return keyboard
+
+
+def create_stars_amount_keyboard(username: str) -> InlineKeyboardMarkup:
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        InlineKeyboardButton(text="50 ⭐️", callback_data=f"confirm_stars:50:{username}"),
+        InlineKeyboardButton(text="75 ⭐️", callback_data=f"confirm_stars:75:{username}"),
+        InlineKeyboardButton(text="100 ⭐️", callback_data=f"confirm_stars:100:{username}"),
+        InlineKeyboardButton(text="250 ⭐️", callback_data=f"confirm_stars:250:{username}"),
+        InlineKeyboardButton(text="500 ⭐️", callback_data=f"confirm_stars:500:{username}"),
+        InlineKeyboardButton(text="1 000 ⭐️", callback_data=f"confirm_stars:1000:{username}"),
+        InlineKeyboardButton(text="2 500 ⭐️", callback_data=f"confirm_stars:2500:{username}"),
+        InlineKeyboardButton(text="5 000 ⭐️", callback_data=f"confirm_stars:10000:{username}"),
+        InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_main_menu")
+    )
+    return keyboard
+
+
+def create_premium_duration_keyboard(username: str) -> InlineKeyboardMarkup:
+    keyboard = InlineKeyboardMarkup(row_width=3)
+    keyboard.add(
+        InlineKeyboardButton(text="3 Месяца", callback_data=f"confirm_premium:3:{username}"),
+        InlineKeyboardButton(text="6 Месяцев", callback_data=f"confirm_premium:6:{username}"),
+        InlineKeyboardButton(text="12 Месяцев", callback_data=f"confirm_premium:12:{username}"),
+        InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_main_menu")
+    )
+    return keyboard
+
+
+def create_faq_keyboard() -> InlineKeyboardMarkup:
+    keyboard = InlineKeyboardMarkup(row_width=1)
+    keyboard.add(
+        InlineKeyboardButton(text="Техподдержка", url="https://t.me/new_vanulkin"),
+        InlineKeyboardButton(text="Политика конфидециальности", url="https://telegra.ph/Politika-konfidencialnosti-08-16-16"),
+        InlineKeyboardButton(text="Пользовательское соглашение", url="https://telegra.ph/Polzovatelskoe-soglashenie-08-16-8"),
+        InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_main_menu")
+    )
+    return keyboard
+
+
+def create_admin_keyboard() -> InlineKeyboardMarkup:
+    keyboard = InlineKeyboardMarkup(row_width=1)
+    keyboard.add(
+        InlineKeyboardButton(text="Просмотр БД", callback_data="view_db"),
+        InlineKeyboardButton(text="Заблокировать", callback_data="ban_user"),
+        InlineKeyboardButton(text="Разблокировать", callback_data="unban_user"),
+        InlineKeyboardButton(text="Объявление", callback_data="broadcast"),
+        InlineKeyboardButton(text="Баланс API", callback_data="check_api_balance"),
+        InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_main_menu")
+    )
+    return keyboard
+
+
+def get_user_profile(user_id):
+    conn = create_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT username, stars_bought, premium_months_bought, banned FROM users WHERE user_id = ?",
+                   (user_id,))
+    result = cursor.fetchone()
+    conn.close()
+    if result:
+        username, stars_bought, premium_months_bought, banned = result
+        return {"username": username, "stars_bought": stars_bought,
+                "premium_months_bought": premium_months_bought, "banned": bool(banned)}
+    else:
+        return {"username": None, "stars_bought": 0, "premium_months_bought": 0, "banned": False}
+
+
+def update_user_profile(user_id, username, stars=0, premium_months=0):
+    conn = create_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "INSERT INTO users (user_id, username, stars_bought, premium_months_bought) VALUES (?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET username=?, stars_bought=stars_bought + ?, premium_months_bought=premium_months_bought + ?",
+            (user_id, username, stars, premium_months, username, stars, premium_months),
+        )
+        conn.commit()
+    except Exception as e:
+        logging.error(f"Database update error: {e}")
+    finally:
+        conn.close()
+
+
+def ban_user(user_id):
+    conn = create_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET banned = 1 WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+    return cursor.rowcount > 0
+
+
+def unban_user(user_id):
+    conn = create_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET banned = 0 WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+    return cursor.rowcount > 0
+
+
+def get_total_users():
+    conn = create_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM users")
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count
+
+
+def get_top_spender():
+    conn = create_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT user_id, stars_bought + premium_months_bought FROM users ORDER BY stars_bought + premium_months_bought DESC LIMIT 1")
+    result = cursor.fetchone()
+    conn.close()
+    if result:
+        return result[0], result[1]
+    else:
+        return None, 0
+
+
+def get_total_stars_bought():
+    conn = create_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT SUM(stars_bought) FROM users")
+    total = cursor.fetchone()[0]
+    conn.close()
+    return total if total else 0
+
+
+def get_all_user_ids():
+    conn = create_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id FROM users")
+    ids = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return ids
+
 
 async def get_price(item_type: str, amount: int) -> dict:
     async with aiohttp.ClientSession() as session:
@@ -118,7 +296,10 @@ async def make_invoice(item_type: str, amount: int, user_id: int):
     try:
         invoice = await crypto.create_invoice(asset='USDT', amount=price_with_fee)
 
-        INVOICE_STORE[user_id] = invoice.invoice_id
+        # Store invoice_id in PURCHASE_DATA instead of global INVOICE_STORE
+        if user_id not in PURCHASE_DATA:
+            PURCHASE_DATA[user_id] = {}
+        PURCHASE_DATA[user_id]['invoice_id'] = invoice.invoice_id
 
         return invoice.bot_invoice_url
     except Exception as e:
@@ -154,14 +335,13 @@ async def check_payment_status(invoice_id: int) -> bool:
 async def start_command(message: types.Message):
     user_id = message.from_user.id
     username = message.from_user.username
-    update_user_profile(DATABASE_FILE, user_id, username)
+    update_user_profile(user_id, username)
 
     text = "Добро пожаловать в Stars Storage!\n\nВыберите действие:"
     await message.answer(text, reply_markup=create_main_menu_keyboard())
 
 
 async def buy_stars_callback(query: types.CallbackQuery):
-    from data.keyboards import create_username_choice_keyboard
     user_id = query.from_user.id
     username = query.from_user.username
     text = escape_md(f"⭐️ Покупка Звёзд\n\n🔎 Введите юзернейм пользователя, которому будем дарить звёзды:\n— Пример: @{username}")
@@ -173,7 +353,6 @@ async def buy_stars_callback(query: types.CallbackQuery):
 
 
 async def buy_premium_callback(query: types.CallbackQuery):
-    from data.keyboards import create_username_choice_keyboard
     user_id = query.from_user.id
     username = query.from_user.username
     text = escape_md(f"👑 Покупка Премиум\n\n🔎 Введите юзернейм пользователя, которому будем дарить премиум:\n— Пример: @{username}")
@@ -185,7 +364,6 @@ async def buy_premium_callback(query: types.CallbackQuery):
 
 
 async def buy_for_self_callback(query: types.CallbackQuery):
-    from data.keyboards import create_stars_amount_keyboard, create_premium_duration_keyboard
     callback_data = query.data.split(":")
     item_type = callback_data[1]
     amount = int(callback_data[2]) if len(callback_data) > 2 else 0
@@ -211,11 +389,19 @@ async def buy_for_self_callback(query: types.CallbackQuery):
 
 
 async def confirm_purchase_callback(query: types.CallbackQuery):
-    from data.keyboards import create_main_menu_keyboard
     callback_data = query.data.split(":")
     item_type = callback_data[0].split("_")[1].upper()
     amount = int(callback_data[1])
     username = callback_data[2]
+    user_id = query.from_user.id
+
+    # Store purchase details in PURCHASE_DATA
+    if user_id not in PURCHASE_DATA:
+        PURCHASE_DATA[user_id] = {}
+    PURCHASE_DATA[user_id]['item_type'] = item_type
+    PURCHASE_DATA[user_id]['amount'] = amount
+    PURCHASE_DATA[user_id]['username'] = username
+
 
     price_data = await get_price(item_type, amount)
     if price_data and price_data["status"]:
@@ -228,7 +414,7 @@ async def confirm_purchase_callback(query: types.CallbackQuery):
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="✅ Подтвердить",
-                                    callback_data=f"process_payment:{item_type}:{amount}:{username}")],
+                                    callback_data="process_payment")],
             [InlineKeyboardButton(text="🚫 Отменить", callback_data="back_to_main_menu")]
         ])
         await bot.edit_message_text(text, query.message.chat.id, query.message.message_id, reply_markup=keyboard,
@@ -243,24 +429,25 @@ async def confirm_purchase_callback(query: types.CallbackQuery):
 
 
 async def process_payment_callback(query: types.CallbackQuery):
-    from data.keyboards import create_main_menu_keyboard
-    callback_data = query.data.split(":")
-    item_type = callback_data[1]
-    amount = int(callback_data[2])
-    username = callback_data[3]
     user_id = query.from_user.id
+
+    if user_id not in PURCHASE_DATA or 'item_type' not in PURCHASE_DATA[user_id] or 'amount' not in PURCHASE_DATA[user_id] or 'username' not in PURCHASE_DATA[user_id]:
+        await bot.send_message(query.message.chat.id, "Данные о покупке не найдены. Пожалуйста, начните процесс покупки заново.", reply_markup=create_main_menu_keyboard())
+        return
+
+    item_type = PURCHASE_DATA[user_id]['item_type']
+    amount = PURCHASE_DATA[user_id]['amount']
+    username = PURCHASE_DATA[user_id]['username']
 
     invoice_url = await make_invoice(item_type, amount, user_id)
 
     if item_type == 'STARS':
         payment_data[user_id] = {
-            "invoice_id": INVOICE_STORE[user_id] ,
             "stars": amount,
             "premium": None
         }
     else:
         payment_data[user_id] = {
-            "invoice_id": INVOICE_STORE[user_id] ,
             "stars": None,
             "premium": amount
         }
@@ -269,7 +456,7 @@ async def process_payment_callback(query: types.CallbackQuery):
         text = f"💲 Счет для оплаты:\n\n{invoice_url}\n\nПосле оплаты счета товар будет отправлен на аккаунт "
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Я оплатил ✅",
-                                    callback_data=f"check_payment:{item_type}:{amount}:{username}")]
+                                    callback_data="check_payment")]
         ])
         await bot.edit_message_text(text, query.message.chat.id, query.message.message_id, reply_markup=keyboard)
     else:
@@ -280,30 +467,32 @@ async def process_payment_callback(query: types.CallbackQuery):
 
 
 async def check_payment_callback(query: types.CallbackQuery):
-    from data.keyboards import create_main_menu_keyboard
-    from data.db import update_user_profile
-    callback_data = query.data.split(":")
-    item_type = callback_data[1]
-    amount = int(callback_data[2])
-    username = callback_data[3]
     user_id = query.from_user.id
 
-    invoice_id = INVOICE_STORE.get(user_id)
+    if user_id not in PURCHASE_DATA or 'item_type' not in PURCHASE_DATA[user_id] or 'amount' not in PURCHASE_DATA[user_id] or 'username' not in PURCHASE_DATA[user_id]:
+        await bot.send_message(query.message.chat.id, "Данные о покупке не найдены. Пожалуйста, начните процесс покупки заново.", reply_markup=create_main_menu_keyboard())
+        return
 
-    if invoice_id is None:
+    item_type = PURCHASE_DATA[user_id]['item_type']
+    amount = PURCHASE_DATA[user_id]['amount']
+    username = PURCHASE_DATA[user_id]['username']
+
+    if 'invoice_id' not in PURCHASE_DATA[user_id]:
         text = "Счёт не найден. Пожалуйста, создайте новый счёт."
         await bot.edit_message_text(text, query.message.chat.id, query.message.message_id,
                                 reply_markup=create_main_menu_keyboard())
         await query.answer()
         return
 
+    invoice_id = PURCHASE_DATA[user_id]['invoice_id']
+
+
     crypto = await create_crypto_client()
 
     if not crypto:
-        await bot.edit_message_text("❌ Ошибка платежной системы", query.message.chat.id, query.message.message_id)
+        bot.answer_callback_query(user_id, "❌ Произошла ошибка платежной системы. Попробуйте позже")
         return
 
-    invoice_id = payment_data[user_id]["invoice_id"]
     is_paid = await check_payment_status(invoice_id)  # Call the helper function
 
     if is_paid:
@@ -312,40 +501,38 @@ async def check_payment_callback(query: types.CallbackQuery):
 
             if order_result and order_result["status"]:
                 if item_type == "STARS":
-                    update_user_profile(DATABASE_FILE, user_id, username, stars=amount)
+                    update_user_profile(user_id, username, stars=amount)
                 elif item_type == "PREMIUM":
-                    update_user_profile(DATABASE_FILE, user_id, username, premium_months=amount)
+                    update_user_profile(user_id, username, premium_months=amount)
 
                 text = "✅ Заказ успешно выполнен, товар будет доставлен в течение 1 минуты\n\n❓Есть вопросы или столкнулись с проблемой? Обратитесь в поддержку — @new_vanulkin"
+                # Clear PURCHASE_DATA after successful purchase
+                del PURCHASE_DATA[user_id]
 
-                if user_id in INVOICE_STORE:
-                    del INVOICE_STORE[user_id]
             else:
-                text = "Ошибка выполнения заказа. Повторите позже."
+                bot.answer_callback_query(user_id, "❌ Произошла ошибка выполнения заказа. Попробуйте позже")
         except Exception as e:
             logging.exception(f"An unexpected error occurred: {e}")
-            text = "Произошла непредвиденная ошибка. Пожалуйста, попробуйте позже."
+            bot.answer_callback_query(user_id, "❌ Произошла неизвестная ошибка. Попробуйте позже")
     else:
-        text = "Оплата не подтверждена. Пожалуйста, убедитесь, что вы оплатили счёт, и попробуйте еще раз."
+        bot.answer_callback_query(user_id, "❌ Оплата не найдена")
 
-    await bot.edit_message_text(text, query.message.chat.id, query.message.message_id,
-                            reply_markup=create_main_menu_keyboard())
+    # await bot.edit_message_text(text, query.message.chat.id, query.message.message_id,
+    #                         reply_markup=create_main_menu_keyboard())
     await query.answer()
 
 
 async def profile_callback(query: types.CallbackQuery):
-    from data.db import get_user_profile
-    from data.keyboards import create_main_menu_keyboard
     user_id = query.from_user.id
-    profile = get_user_profile(DATABASE_FILE, user_id)
+    profile = get_user_profile(user_id)
     username = profile["username"] or "N/A"
 
     text = (
         bold("Ваш профиль") + "\n"
-        f"Имя пользователя: @{username}\n"
+        f"Имя пользователя: {username}\n"
         f"ID: <code>{user_id}</code>\n"
-        f"⭐️ Куплено звёзд: {profile['stars_bought']} \n"
-        f"👑 Премиум на (мес.): {profile['premium_months_bought']} "
+        f"Куплено звёзд: {profile['stars_bought']} ✨\n"
+        f"Премиум на (мес.): {profile['premium_months_bought']} 👑"
     )
     await bot.edit_message_text(text, query.message.chat.id, query.message.message_id,
                             reply_markup=create_main_menu_keyboard())
@@ -353,7 +540,6 @@ async def profile_callback(query: types.CallbackQuery):
 
 
 async def faq_callback(query: types.CallbackQuery):
-    from data.keyboards import create_faq_keyboard
     text = """
 *Часто задаваемые вопросы и наши проекты*
 
@@ -381,15 +567,73 @@ async def faq_callback(query: types.CallbackQuery):
 
 
 async def back_to_main_menu_callback(query: types.CallbackQuery):
-    from data.keyboards import create_main_menu_keyboard
     text = "Добро пожаловать в Stars Storage!\n\nВыберите действие:"
     await bot.edit_message_text(text, query.message.chat.id, query.message.message_id,
                             reply_markup=create_main_menu_keyboard())
     await query.answer()
 
 
+async def admin_command(message: types.Message):
+    if message.from_user.id == ADMIN_ID:
+        text = "Админ-панель:"
+        keyboard = create_admin_keyboard()
+        await message.answer(text, reply_markup=keyboard)
+    else:
+        await message.answer("У вас нет доступа.")
+
+
+async def view_db_callback(query: types.CallbackQuery):
+    total_users = get_total_users()
+    top_spender_id, max_spent = get_top_spender()
+    total_stars_bought = get_total_stars_bought()
+
+    conn = create_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users")
+    data = cursor.fetchall()
+    conn.close()
+
+    table_string = "user_id | username | stars_bought | premium_months_bought | banned\n"
+    table_string += "-------|----------|-------------|----------------------|--------\n"
+    for row in data:
+        table_string += f"{row[0]:7} | {row[1]:8} | {row[2]:11} | {row[3]:20} | {row[4]:6}\n"
+
+    text = (
+        bold("Статистика") + "\n\n"
+        f"Всего пользователей: {total_users}\n"
+        f"Самый щедрый: ID {top_spender_id} (всего: {max_spent})\n"
+        f"Всего куплено звёзд: {total_stars_bought} ✨\n\n"
+        f"<pre>{table_string}</pre>"
+    )
+
+    await bot.send_message(query.message.chat.id, text, parse_mode="HTML")
+    await query.answer()
+
+
+async def ban_user_callback(query: types.CallbackQuery):
+    pass
+
+
+async def unban_user_callback(query: types.CallbackQuery):
+    pass
+
+
+async def broadcast_callback(query: types.CallbackQuery):
+    pass
+
+
+async def check_api_balance_callback(query: types.CallbackQuery):
+    balance_data = await check_api_balance()
+    if balance_data and balance_data["status"]:
+        balance = balance_data["data"]["balance"]
+        text = f"Баланс API: {balance}"
+    else:
+        text = "Не удалось получить баланс API."
+    await bot.send_message(query.message.chat.id, text)
+    await query.answer()
+
+
 async def username_message_handler(message: types.Message):
-    from data.keyboards import create_stars_amount_keyboard, create_premium_duration_keyboard
     user_id = message.from_user.id
     username = message.text.replace('@', '')
 
@@ -426,9 +670,6 @@ async def username_message_handler(message: types.Message):
 
 
 def register_handlers(dp: Dispatcher):
-    from data.keyboards import create_main_menu_keyboard, create_faq_keyboard
-    from data.db import get_user_profile
-
     dp.register_message_handler(start_command, commands=['start'])
     dp.register_callback_query_handler(buy_stars_callback, text="buy_stars")
     dp.register_callback_query_handler(buy_premium_callback, text="buy_premium")
@@ -436,14 +677,13 @@ def register_handlers(dp: Dispatcher):
     dp.register_callback_query_handler(confirm_purchase_callback,
                                     lambda c: c.data.startswith("confirm_stars") or c.data.startswith(
                                         "confirm_premium"))
-    dp.register_callback_query_handler(process_payment_callback, lambda c: c.data.startswith("process_payment"))
-    dp.register_callback_query_handler(check_payment_callback, lambda c: c.data.startswith("check_payment"))
+    dp.register_callback_query_handler(process_payment_callback, text="process_payment")
+    dp.register_callback_query_handler(check_payment_callback, text="check_payment")
 
     dp.register_callback_query_handler(profile_callback, text="profile")
     dp.register_callback_query_handler(faq_callback, text="faq")
     dp.register_callback_query_handler(back_to_main_menu_callback, text="back_to_main_menu")
 
-    from data.admin import admin_command, view_db_callback, ban_user_callback, unban_user_callback, broadcast_callback, check_api_balance_callback
     dp.register_message_handler(admin_command, commands=['admin'])
     dp.register_callback_query_handler(view_db_callback, text="view_db")
     dp.register_callback_query_handler(ban_user_callback, text="ban_user")
